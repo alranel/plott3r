@@ -125,9 +125,9 @@ use constant Y => 1;
     foreach my $path (@paths) {
         next if !@$path;
         print  $fh "\n";
-        print  $fh "G1 Z90.0\n";
+        print  $fh "G0 Z90.0 ; pen up\n";
         printf $fh "G1 X%.4f Y%.4f\n", @$_ for shift @$path;
-        print  $fh "G0 Z10.0\n";
+        print  $fh "G1 Z10.0 ; pen down\n";
         printf $fh "G1 X%.4f Y%.4f\n", @$_ for @$path;
     }
     
