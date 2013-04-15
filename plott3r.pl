@@ -35,13 +35,61 @@ use constant Y => 1;
     print  $fh "G90 ; use absolute coordinates\n";
     printf $fh "G1 F%d\n", $opt{speed} * 60 if $opt{speed};
     
-    my @paths = ([]);
-    foreach my $path (@{ $handler->{_paths} }) {
-        $path =~ s/[Mz]//g;
-        while ($path =~ s/^\s*(\d+(?:\.\d+))\s+(\d+(?:\.\d+))//) {
-            push @{$paths[-1]}, [$1, $2];
+    my $POINT_RE = qr/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/;
+    
+    my @paths = ();
+    foreach my $d (@{ $handler->{_paths} }) {
+        my $path = [];
+        my $last_pos = [0,0];  # If a relative moveto (m) appears as the first element of the path, then it is treated as a pair of absolute coordinates.
+        
+        # enforce a space after commands
+        $d =~ s/([a-z])([0-9-])/$1 $2/gi;
+        
+        my @tokens = split /\s+/, $d;
+        while (defined (my $token = shift @tokens)) {
+            if ($token eq 'M' || $token eq 'm') {  # moveto
+                my $point = [ split /,/, shift @tokens ];
+                if ($token eq 'm') {
+                    $point->[$_] += $last_pos->[$_] for X,Y;
+                }
+                push @$path, $point;
+                $last_pos = $point;
+                if (@tokens && $tokens[0] =~ /^$POINT_RE$/) {
+                    # If a moveto is followed by multiple pairs of coordinates, the subsequent pairs are treated as implicit lineto commands.
+                    unshift @tokens, $token eq 'M' ? 'L' : 'l';
+                }
+            } elsif ($token eq 'Z' || $token eq 'z') {  # closepath
+                push @$path, $path->[0];
+                $last_pos = $paths[-2][0];
+            } elsif ($token eq 'L' || $token eq 'l') {  # lineto
+                while (@tokens && $tokens[0] =~ /^$POINT_RE$/) {
+                    my $point = [ split /,/, shift @tokens ];
+                    if ($token eq 'l') {
+                        $point->[$_] += $last_pos->[$_] for X,Y;
+                    }
+                    push @$path, $point;
+                    $last_pos = $point;
+                }
+            } elsif ($token =~ /[CcSs]/) {  # curveto
+                my @points = ();
+                push @points, shift @tokens while @tokens && $tokens[0] =~ /^$POINT_RE$/;
+                die "Invalid arguments for $token command in $d\n" if @points % 3 != 0;
+                @points = map $points[3*$_-1], 1 .. @points / 3;
+                foreach my $point (map [ split /,/ ], @points) {
+                    if ($token =~ /[cs]/) {
+                        $point->[$_] += $last_pos->[$_] for X,Y;
+                    }
+                    push @$path, $point;
+                    $last_pos = $point;
+                }
+            } else {
+                die "Unimplemented path command $token in $d\n";
+            }
         }
+        push @paths, $path;
+#            use XXX; XXX $d, $path;
     }
+    die "Unable to parse the input file\n" if !map @$_, @paths;
     
     if ($opt{scale} && $opt{scale} != 1) {
         $_->[X] *= $opt{scale} for map @$_, @paths;
@@ -75,6 +123,11 @@ use constant Y => 1;
     printf "  (total size: %s, %s)\n", ($max_x - $min_x), ($max_y - $min_y);
     
     foreach my $path (@paths) {
+        next if !@$path;
+        print  $fh "\n";
+        print  $fh "G1 Z90.0\n";
+        printf $fh "G1 X%.4f Y%.4f\n", @$_ for shift @$path;
+        print  $fh "G0 Z10.0\n";
         printf $fh "G1 X%.4f Y%.4f\n", @$_ for @$path;
     }
     
